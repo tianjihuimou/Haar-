@@ -1,0 +1,151 @@
+#include "stdafx.h"  
+#include <opencv2/highgui/highgui.hpp>  
+#include <opencv2/imgproc/imgproc.hpp>  
+#include <opencv2/objdetect/objdetect.hpp>  
+#include <iostream>  
+  
+using namespace std;  
+using namespace cv;  
+  
+  
+int _tmain(int argc, _TCHAR* argv[])  
+{  
+    //输入用于面部识别的人脸级联的xml文件  
+    string faceCascadeName = argv[1];  
+      
+    //定义级联分类器，并使用facecascade.load（）加载级联xml文件  
+    CascadeClassifier faceCascade;  
+  
+    if( !faceCascade.load(faceCascadeName) )  
+    {  
+        cerr << "Error loading cascade file. Exiting!" << endl;  
+        return -1;  
+    }  
+  
+  
+    //加载面具图像  
+    Mat faceMask = imread(argv[2]);  
+  
+    if ( !faceMask.data )  
+    {  
+        cerr << "Error loading mask image. Exiting!" << endl;  
+    }  
+  
+    // Current frame  
+    Mat frame, frameGray;  
+    Mat frameROI, faceMaskSmall;  
+    Mat grayMaskSmall, grayMaskSmallThresh, grayMaskSmallThreshInv;  
+    Mat maskedFace, maskedFrame;  
+  
+    char ch;  
+  
+    // 创建摄像头对象 并读入摄像头（按照设备号读入）  
+    VideoCapture cap(0);  
+  
+    // If you cannot open the webcam, stop the execution!  
+    if( !cap.isOpened() )  
+        return -1;  
+  
+    //create GUI windows  
+    namedWindow("Frame");//,CV_WINDOW_NORMAL);  
+  
+    // Scaling factor to resize the input frames from the webcam  
+    float scalingFactor = 0.75;  
+  
+    vector<Rect> faces;  
+  
+    // Iterate until the user presses the Esc key  
+    while(true)  
+    {  
+        // Capture the current frame  
+        cap >> frame;  
+  
+        /* 重置输入图像大小 
+        resize(InputArray src, OutputArray dst, Size dsize, double fx=0, double fy=0, int interpolation=INTER_LINEAR ) 
+        InputArray：原图像 
+        OutputArray：目的图像 
+        Size dsize：目的图像大小，若未定义则dsize=（fx*src.cols,fy*src.rows） 
+        fx：目的图像在原图像宽的基础上的缩放因子 
+        fy：目的图像在原图像高的基础上的缩放因子 
+        interpolation：图像插值方法（INTER_NEAREST - 最近邻插值，INTER_LINEAR - 线性插值（默认），INTER_AREA - 区域插值，INTER_CUBIC - 三次样条插值，INTER_LANCZOS4 - Lanczos插值） 
+        */  
+        resize(frame, frame, Size(), scalingFactor, scalingFactor, INTER_AREA);  
+  
+        // 彩色2灰色  
+        cvtColor(frame, frameGray, CV_BGR2GRAY);  
+  
+        // 直方图均衡化，为了补偿亮度和饱和度等问题  
+        equalizeHist(frameGray, frameGray);  
+  
+        /* 检测脸部，该函数在输入图像的不同尺度中检测物体 
+        void detectMultiScale( const Mat& image,CV_OUT vector<Rect>& objects,double scaleFactor=1.1,int minNeighbors=3, int flags=0,Size minSize=Size(),Size maxSize=Size() ); 
+        image:输入图像 
+        objects:检测到的面部矩形区域 
+        scaleFactor：图像尺度中的尺度参数，默认为1.1 
+        minNeighbors：每一个级联矩形应该保留的近邻个数 默认为3 
+        flags：检测标识（CV_HAAR_DO_CANNY_PRUNING利用Canny边缘检测器来排除一些边缘很少或者很多的图像区域，CV_HAAR_SCALE_IMAGE就是按比例正常检测，CV_HAAR_FIND_BIGGEST_OBJECT只检测最大的物体，CV_HAAR_DO_ROUGH_SEARCH只做初略检测） 
+        minSize：用来限制得到的目标区域的最小范围 
+        maxSize：用来限制得到的目标区域的最大范围 
+        */  
+        faceCascade.detectMultiScale(frameGray, faces, 1.1, 2, 0|CV_HAAR_SCALE_IMAGE, Size(30, 30) );  
+  
+        // 在脸部画绿色矩形  
+        for(int i = 0; i < faces.size(); i++)  
+        {  
+            Rect faceRect(faces[i].x, faces[i].y, faces[i].width, faces[i].height);  
+  
+            // 自定义参数以使面具适合脸的大小，你必须调节他来起作用.  
+            int x = faces[i].x - int(0.1*faces[i].width);  
+            int y = faces[i].y - int(0.0*faces[i].height);  
+            /*int w = int(1.1 * faces[i].width); 
+            int h = int(1.3 * faces[i].height);*/  
+            int w = int(1 * faces[i].width);  
+            int h = int(1 * faces[i].height);  
+  
+  
+            // 提取感兴趣区域来覆盖面部  
+            frameROI = frame(Rect(x,y,w,h));  
+  
+            //在ROI上调整面具图像的基础尺寸  
+            resize(faceMask, faceMaskSmall, Size(w,h));  
+  
+            // 转换面具为灰度图像  
+            cvtColor(faceMaskSmall, grayMaskSmall, CV_BGR2GRAY);  
+  
+            // 隔离图像上像素的边缘，仅与面具有关（即面具的白色区域剔除），下面函数将大于230像素的值置为0,小于的置为255  
+            threshold(grayMaskSmall, grayMaskSmallThresh, 230, 255, CV_THRESH_BINARY_INV);  
+  
+  
+            // 通过反转上面的图像创建掩码（因为不希望背景影响叠加）  
+            bitwise_not(grayMaskSmallThresh, grayMaskSmallThreshInv);  
+  
+  
+            //使用位“与”运算来提取面具精确的边界  
+            bitwise_and(faceMaskSmall, faceMaskSmall, maskedFace, grayMaskSmallThresh);  
+  
+            // 使用位“与”运算来叠加面具  
+            bitwise_and(frameROI, frameROI, maskedFrame, grayMaskSmallThreshInv);  
+  
+            // 添加面具，并将其放置在原始图像的ROI来创建最终图像  
+            add(maskedFace, maskedFrame, frame(Rect(x,y,w,h)));  
+        }  
+  
+          
+        imshow("Frame", frame);  
+  
+        // Get the keyboard input and check if it's 'Esc'  
+        // 27 -> ASCII value of 'Esc' key  
+        ch = waitKey( 30 );  
+        if (ch == 27) {  
+            break;  
+        }  
+    }  
+  
+    // 释放the video capture object  
+    cap.release();  
+  
+    // 释放窗口  
+    destroyAllWindows();  
+  
+    return 1;  
+}  
